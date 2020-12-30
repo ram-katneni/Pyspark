@@ -1,0 +1,355 @@
+
+Problem Statement
+
+Using the Source data sets, Identify the Top Revenue Loss(>1000 Dollors) Products which are Cancelled by the Customer
+
+Solution
+
+Use the Open Source PYSPARK (ETL), Extract, Transform & Aggregate the data as per the requirement
+Source Data (Orders, Order_Items & Products) are available as .csv files in (Local File Sytem)
+PYSPARK - Using Python API for Spark
+RDD - Resilient distributed dataset for Transformations/Actions
+DATAFRAME for Transformations & Aggregations
+MATPLOTLIB for Data Visualization
+
+Source Data Schema Details
+
+
+
+Create the Spark Context using local mode
+In [3]:
+from pyspark import SparkContext, SparkConf
+conf = SparkConf().setAppName("revenueloss").setMaster("local")
+sc = SparkContext(conf=conf)
+
+Create RDD's using the implicit spark context("sc")
+Read orders data
+In [27]:
+orders = sc.textFile("/home/datamaking/data/data-master/retail_db/orders/orders.csv")
+for i in orders.take(5): print(i)
+orders.count()
+
+1,2013-07-25 00:00:00.0,11599,CLOSED
+2,2013-07-25 00:00:00.0,256,PENDING_PAYMENT
+3,2013-07-25 00:00:00.0,12111,COMPLETE
+4,2013-07-25 00:00:00.0,8827,CLOSED
+5,2013-07-25 00:00:00.0,11318,COMPLETE
+Out[27]:
+68883
+
+Read OrderItems Data
+In [28]:
+orderItems = sc.textFile("/home/datamaking/data/data-master/retail_db/order_items/order-items.csv")
+for i in orderItems.take(5): print(i)
+orderItems.count()
+
+1,1,957,1,299.98,299.98
+2,2,1073,1,199.99,199.99
+3,2,502,5,250.0,50.0
+4,2,403,1,129.99,129.99
+5,4,897,2,49.98,24.99
+Out[28]:
+172198
+
+Display the distinct order status
+In [29]:
+for i in orders.map(lambda o: o.split(",")[3]).distinct().collect():
+	print(i)
+
+CLOSED
+PENDING_PAYMENT
+COMPLETE
+PROCESSING
+PAYMENT_REVIEW
+PENDING
+ON_HOLD
+CANCELED
+SUSPECTED_FRAUD
+
+Filter for CANCELLED Orders
+In [30]:
+ordersFiltered = orders.filter(lambda o: o.split(",")[3] in ["CANCELED"])
+for i in ordersFiltered.take(5):
+	print(i)
+
+50,2013-07-25 00:00:00.0,5225,CANCELED
+112,2013-07-26 00:00:00.0,5375,CANCELED
+527,2013-07-28 00:00:00.0,5426,CANCELED
+552,2013-07-28 00:00:00.0,1445,CANCELED
+564,2013-07-28 00:00:00.0,2216,CANCELED
+
+Count the number of CANCELLED Orders
+In [31]:
+ordersFiltered.count()
+Out[31]:
+1428
+
+Perform the Pair RDD's using key value pairs using orders and order-items data ( common attribute order-id from both the data sources)
+In [32]:
+ordersMap = ordersFiltered. \
+	map(lambda o: (int(o.split(",")[0]), o.split(",")[1]))
+
+orderItemsMap = orderItems. \
+	map(lambda oi:
+		 (int(oi.split(",")[1]), (int(oi.split(",")[2]), float(oi.split(",")[4]))))
+
+#Preview the sample 5 records of ordersMap and ordersItemMap
+In [33]:
+for i in ordersMap.take(5):
+	print(i)
+
+for i in orderItemsMap.take(5):
+	print(i)
+
+(50, '2013-07-25 00:00:00.0')
+(112, '2013-07-26 00:00:00.0')
+(527, '2013-07-28 00:00:00.0')
+(552, '2013-07-28 00:00:00.0')
+(564, '2013-07-28 00:00:00.0')
+(1, (957, 299.98))
+(2, (1073, 199.99))
+(2, (502, 250.0))
+(2, (403, 129.99))
+(4, (897, 49.98))
+
+Join orders and orderitems data using the pair RDD's (ordersMap and orderItemsMap)
+In [34]:
+ordersJoin = ordersMap.join(orderItemsMap)
+
+for i in ordersJoin.take(5):
+	print(i)
+
+(50, ('2013-07-25 00:00:00.0', (403, 129.99)))
+(50, ('2013-07-25 00:00:00.0', (957, 299.98)))
+(112, ('2013-07-26 00:00:00.0', (1014, 99.96)))
+(112, ('2013-07-26 00:00:00.0', (642, 120.0)))
+(112, ('2013-07-26 00:00:00.0', (365, 119.98)))
+
+Need to convert the data(ordersJoin) as below using the map function
+(12, ('2013-07-25 00:00:00.0', (957, 299.98))) -> ((2013-07-25 00:00:00.0, 957), 299.98)
+In [35]:
+ordersJoinMap = ordersJoin. \
+map(lambda o: ((o[1][0],o[1][1][0]), o[1][1][1]))
+
+for i in ordersJoinMap.take(5):
+	print(i)
+
+(('2013-07-25 00:00:00.0', 403), 129.99)
+(('2013-07-25 00:00:00.0', 957), 299.98)
+(('2013-07-26 00:00:00.0', 1014), 99.96)
+(('2013-07-26 00:00:00.0', 642), 120.0)
+(('2013-07-26 00:00:00.0', 365), 119.98)
+
+Aggregate to get the daily revenue loss per product id using reduceby key
+In [36]:
+from operator import add
+dailyRevenueLossPerProductId = ordersJoinMap.reduceByKey(add)
+
+for i in dailyRevenueLossPerProductId.take(5):
+	print(i)
+
+(('2013-07-25 00:00:00.0', 403), 129.99)
+(('2013-07-25 00:00:00.0', 957), 299.98)
+(('2013-07-26 00:00:00.0', 1014), 149.94)
+(('2013-07-26 00:00:00.0', 642), 120.0)
+(('2013-07-26 00:00:00.0', 1004), 399.98)
+
+Read products data
+In [37]:
+products = sc.textFile("/home/datamaking/data/data-master/retail_db/products/part-00000")
+
+for i in products.take(5):
+	print(i)
+
+1,2,Quest Q64 10 FT. x 10 FT. Slant Leg Instant U,,59.98,http://images.acmesports.sports/Quest+Q64+10+FT.+x+10+FT.+Slant+Leg+Instant+Up+Canopy
+2,2,Under Armour Men's Highlight MC Football Clea,,129.99,http://images.acmesports.sports/Under+Armour+Men%27s+Highlight+MC+Football+Cleat
+3,2,Under Armour Men's Renegade D Mid Football Cl,,89.99,http://images.acmesports.sports/Under+Armour+Men%27s+Renegade+D+Mid+Football+Cleat
+4,2,Under Armour Men's Renegade D Mid Football Cl,,89.99,http://images.acmesports.sports/Under+Armour+Men%27s+Renegade+D+Mid+Football+Cleat
+5,2,Riddell Youth Revolution Speed Custom Footbal,,199.99,http://images.acmesports.sports/Riddell+Youth+Revolution+Speed+Custom+Football+Helmet
+
+Create a key value pair using the map and tuples
+In [38]:
+productsMap = products. \
+map(lambda p: (int(p.split(",")[0]), p.split(",")[2]))
+
+
+for i in productsMap.take(5):
+	print(i)
+
+(1, 'Quest Q64 10 FT. x 10 FT. Slant Leg Instant U')
+(2, "Under Armour Men's Highlight MC Football Clea")
+(3, "Under Armour Men's Renegade D Mid Football Cl")
+(4, "Under Armour Men's Renegade D Mid Football Cl")
+(5, 'Riddell Youth Revolution Speed Custom Footbal')
+
+Create a key value pair using the map and tuples for RDD Pair (dailyRevenueLossPerProductId) to join the products data
+In [39]:
+dailyRevenueLossPerProductIdMap = dailyRevenueLossPerProductId. \
+map(lambda r: (r[0][1], (r[0][0], r[1])))
+
+for i in dailyRevenueLossPerProductIdMap.take(5):
+	print(i)
+
+(403, ('2013-07-25 00:00:00.0', 129.99))
+(957, ('2013-07-25 00:00:00.0', 299.98))
+(1014, ('2013-07-26 00:00:00.0', 149.94))
+(642, ('2013-07-26 00:00:00.0', 120.0))
+(1004, ('2013-07-26 00:00:00.0', 399.98))
+
+Create the final RDD contains the Product id, name, date and revenue loss amount
+In [40]:
+dailyRevenueLossPerProductIdMapFinal = productsMap.join(dailyRevenueLossPerProductIdMap)
+dailyRevLossPerProduct = dailyRevenueLossPerProductIdMapFinal. \
+map(lambda t : (t[0], t[1][0], t[1][1][0], t[1][1][1]))
+for i in dailyRevLossPerProduct.take(10):
+    print(i)
+
+(93, "Under Armour Men's Tech II T-Shirt", '2014-04-12 00:00:00.0', 49.98)
+(93, "Under Armour Men's Tech II T-Shirt", '2013-10-31 00:00:00.0', 99.96)
+(93, "Under Armour Men's Tech II T-Shirt", '2013-08-21 00:00:00.0', 24.99)
+(93, "Under Armour Men's Tech II T-Shirt", '2013-08-29 00:00:00.0', 24.99)
+(93, "Under Armour Men's Tech II T-Shirt", '2013-11-20 00:00:00.0', 124.95)
+(93, "Under Armour Men's Tech II T-Shirt", '2013-11-28 00:00:00.0', 99.96)
+(135, 'Nike Dri-FIT Crew Sock 6 Pack', '2014-03-22 00:00:00.0', 22.0)
+(135, 'Nike Dri-FIT Crew Sock 6 Pack', '2013-09-02 00:00:00.0', 88.0)
+(135, 'Nike Dri-FIT Crew Sock 6 Pack', '2014-02-03 00:00:00.0', 22.0)
+(135, 'Nike Dri-FIT Crew Sock 6 Pack', '2014-04-24 00:00:00.0', 110.0)
+
+Convert RDD into the DataFrame with Schema and preview the data
+In [64]:
+dailyRevLossPerProductDF = dailyRevLossPerProduct.toDF(['productId','productName','cancelledDate','revenueLossAmt'])
+dailyRevLossPerProductDF.head(5)
+Out[64]:
+[Row(productId=93, productName="Under Armour Men's Tech II T-Shirt", cancelledDate='2014-04-12 00:00:00.0', revenueLossAmt=49.98),
+ Row(productId=93, productName="Under Armour Men's Tech II T-Shirt", cancelledDate='2013-10-31 00:00:00.0', revenueLossAmt=99.96),
+ Row(productId=93, productName="Under Armour Men's Tech II T-Shirt", cancelledDate='2013-08-21 00:00:00.0', revenueLossAmt=24.99),
+ Row(productId=93, productName="Under Armour Men's Tech II T-Shirt", cancelledDate='2013-08-29 00:00:00.0', revenueLossAmt=24.99),
+ Row(productId=93, productName="Under Armour Men's Tech II T-Shirt", cancelledDate='2013-11-20 00:00:00.0', revenueLossAmt=124.95)]
+
+Sort the DataFrame using Product id Ascending and preview the data
+In [70]:
+dailyRevLossPerProductDFSort = dailyRevLossPerProductDF.orderBy(dailyRevLossPerProductDF.revenueLossAmt.desc())
+dailyRevLossPerProductDFSort.show()
+
++---------+--------------------+--------------------+--------------+
+|productId|         productName|       cancelledDate|revenueLossAmt|
++---------+--------------------+--------------------+--------------+
+|     1004|Field & Stream Sp...|2013-11-03 00:00:...|       2399.88|
+|     1004|Field & Stream Sp...|2014-05-09 00:00:...|       2399.88|
+|     1004|Field & Stream Sp...|2014-01-28 00:00:...|        1999.9|
+|     1004|Field & Stream Sp...|2014-04-09 00:00:...|        1999.9|
+|     1004|Field & Stream Sp...|2013-12-05 00:00:...|        1999.9|
+|     1004|Field & Stream Sp...|2014-04-29 00:00:...|        1999.9|
+|     1004|Field & Stream Sp...|2013-10-13 00:00:...|        1999.9|
+|      860|Bushnell Pro X7 J...|2014-03-26 00:00:...|       1799.97|
+|      957|Diamondback Women...|2013-09-02 00:00:...|       1799.88|
+|      191|Nike Men's Free 5...|2014-02-25 00:00:...|       1699.83|
+|     1004|Field & Stream Sp...|2014-07-22 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2014-02-19 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2013-12-17 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2014-07-18 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2014-02-04 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2013-09-24 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2013-10-06 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2014-02-10 00:00:...|       1599.92|
+|      957|Diamondback Women...|2014-07-23 00:00:...|        1499.9|
+|      191|Nike Men's Free 5...|2014-03-20 00:00:...|       1399.86|
++---------+--------------------+--------------------+--------------+
+only showing top 20 rows
+
+
+Filter the Products which are having price amount > 1000.00
+In [196]:
+dailyRevLossPerProductFilter = dailyRevLossPerProductDFSort.filter(dailyRevLossPerProductDFSort.revenueLossAmt > 1000.00)
+In [197]:
+dailyRevLossPerProductFilter.show()
+
++---------+--------------------+--------------------+--------------+
+|productId|         productName|       cancelledDate|revenueLossAmt|
++---------+--------------------+--------------------+--------------+
+|     1004|Field & Stream Sp...|2014-05-09 00:00:...|       2399.88|
+|     1004|Field & Stream Sp...|2013-11-03 00:00:...|       2399.88|
+|     1004|Field & Stream Sp...|2014-04-09 00:00:...|        1999.9|
+|     1004|Field & Stream Sp...|2013-10-13 00:00:...|        1999.9|
+|     1004|Field & Stream Sp...|2013-12-05 00:00:...|        1999.9|
+|     1004|Field & Stream Sp...|2014-01-28 00:00:...|        1999.9|
+|     1004|Field & Stream Sp...|2014-04-29 00:00:...|        1999.9|
+|      860|Bushnell Pro X7 J...|2014-03-26 00:00:...|       1799.97|
+|      957|Diamondback Women...|2013-09-02 00:00:...|       1799.88|
+|      191|Nike Men's Free 5...|2014-02-25 00:00:...|       1699.83|
+|     1004|Field & Stream Sp...|2014-07-22 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2014-02-04 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2013-10-06 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2014-07-18 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2013-09-24 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2014-02-19 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2014-02-10 00:00:...|       1599.92|
+|     1004|Field & Stream Sp...|2013-12-17 00:00:...|       1599.92|
+|      957|Diamondback Women...|2014-07-23 00:00:...|        1499.9|
+|      191|Nike Men's Free 5...|2014-03-20 00:00:...|       1399.86|
++---------+--------------------+--------------------+--------------+
+only showing top 20 rows
+
+In [198]:
+dailyRevLossPerProductSort = dailyRevLossPerProductFilter.orderBy(dailyRevLossPerProductFilter.productId)
+dailyRevLossPerProductSort.show()
+
++---------+--------------------+--------------------+------------------+
+|productId|         productName|       cancelledDate|    revenueLossAmt|
++---------+--------------------+--------------------+------------------+
+|      191|Nike Men's Free 5...|2014-03-20 00:00:...|           1399.86|
+|      191|Nike Men's Free 5...|2014-07-07 00:00:...|1199.8799999999999|
+|      191|Nike Men's Free 5...|2014-02-25 00:00:...|           1699.83|
+|      191|Nike Men's Free 5...|2013-10-06 00:00:...|1299.8700000000001|
+|      191|Nike Men's Free 5...|2013-09-16 00:00:...|           1299.87|
+|      191|Nike Men's Free 5...|2014-03-14 00:00:...|           1399.86|
+|      191|Nike Men's Free 5...|2014-04-01 00:00:...|1299.8700000000001|
+|      191|Nike Men's Free 5...|2014-07-03 00:00:...|           1099.89|
+|      365|Perfect Fitness P...|2014-05-11 00:00:...|           1079.82|
+|      365|Perfect Fitness P...|2014-05-09 00:00:...|           1259.79|
+|      365|Perfect Fitness P...|2013-08-30 00:00:...|1019.8299999999999|
+|      365|Perfect Fitness P...|2014-05-18 00:00:...|           1319.78|
+|      365|Perfect Fitness P...|2013-12-01 00:00:...|1019.8299999999999|
+|      365|Perfect Fitness P...|2014-03-23 00:00:...|1019.8299999999999|
+|      365|Perfect Fitness P...|2014-06-27 00:00:...|           1019.83|
+|      365|Perfect Fitness P...|2014-05-02 00:00:...|1019.8299999999999|
+|      502|Nike Men's Dri-FI...|2014-05-09 00:00:...|            1100.0|
+|      860|Bushnell Pro X7 J...|2014-03-26 00:00:...|           1799.97|
+|      957|Diamondback Women...|2013-09-16 00:00:...|           1199.92|
+|      957|Diamondback Women...|2013-09-02 00:00:...|           1799.88|
++---------+--------------------+--------------------+------------------+
+only showing top 20 rows
+
+In [199]:
+import pyspark.sql.functions as f
+
+dailyRevLossPerProductGroup = dailyRevLossPerProductSort.groupBy('productName').agg(f.max('revenueLossAmt'))
+In [200]:
+dailyRevLossPerProductGroup.show()
+
++--------------------+-------------------+
+|         productName|max(revenueLossAmt)|
++--------------------+-------------------+
+|Field & Stream Sp...|            2399.88|
+|Nike Men's Dri-FI...|             1100.0|
+|Perfect Fitness P...|            1319.78|
+|Diamondback Women...|            1799.88|
+|Nike Men's Free 5...|            1699.83|
+|Bushnell Pro X7 J...|            1799.97|
++--------------------+-------------------+
+
+In [201]:
+import matplotlib.pyplot as plt
+import pandas as pd
+from pyspark.sql.types import *
+In [202]:
+x=dailyRevLossPerProductGroup.toPandas()["productName"].values.tolist()
+y=dailyRevLossPerProductGroup.toPandas()["max(revenueLossAmt)"].values.tolist()
+In [203]:
+plt.rcParams['figure.figsize'] = (25,6)
+plt.bar(x,y)
+plt.show()
+
+ 
+In [ ]:
+ 
